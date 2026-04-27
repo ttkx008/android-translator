@@ -63,7 +63,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
-    implementation("androidx.compose.material:material-icons-outlined")
+    implementation("androidx.compose.material:material-icons-extended")
 
     // OkHttp for API calls
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

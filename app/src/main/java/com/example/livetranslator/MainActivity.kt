@@ -378,6 +378,7 @@ fun TranslatorScreen(
                         fontSize = 14.sp
                     )
                     }
+                }
 
                 Button(
                     onClick = { onStartListening(Speaker.B) },
@@ -395,6 +396,7 @@ fun TranslatorScreen(
                         fontSize = 14.sp
                     )
                     }
+                }
             }
 
             // Clear Button

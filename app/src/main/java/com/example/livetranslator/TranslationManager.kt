@@ -1,6 +1,7 @@
 package com.example.livetranslator
 
 import android.content.Context
+import android.content.Intent
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -107,7 +108,6 @@ class TranslationManager(
             else -> Locale.ENGLISH
         }
 
-        val intent = RecognizerIntent.getVoiceDetailsIntent(context.packageName)
         val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, currentLocale)

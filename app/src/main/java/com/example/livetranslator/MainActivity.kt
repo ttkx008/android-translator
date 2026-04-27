@@ -146,7 +146,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun translateText(text: String) {
-        currentListeningSpeaker.value?.let { speaker ->
+        viewModel.currentListeningSpeaker.value?.let { speaker ->
             val sourceLang = if (speaker == Speaker.A) viewModel.sourceLanguage.value else viewModel.targetLanguage.value
             val targetLang = if (speaker == Speaker.A) viewModel.targetLanguage.value else viewModel.sourceLanguage.value
 
@@ -249,21 +249,9 @@ class TranslationViewModel {
         }
     }
 
-    private fun getMockTranslation(text: String, targetLang: Language): String {
-        // For this demo, just return placeholder text
-        return "[Translated to ${targetLang.name}]: $text"
-    }
-
     fun onError(error: String) {
         isListening.value = false
         errorMessage.value = error
-    }
-
-    // For demo only - in production replace with real translation API
-    private fun getMockTranslation(text: String, targetLang: Language): String {
-        // In real app: call API here
-        // For this demo, just return placeholder text that indicates where translation would be
-        return "[Translated to ${targetLang.name}]: $text"
     }
 
     fun clearConversation() {
@@ -383,13 +371,13 @@ fun TranslatorScreen(
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         "🎤\nA (${sourceLanguage.code})",
                         color = Color.Black,
                         fontSize = 14.sp
                     )
-                }
+                    }
 
                 Button(
                     onClick = { onStartListening(Speaker.B) },
@@ -400,13 +388,13 @@ fun TranslatorScreen(
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         "🎤\nB (${targetLanguage.code})",
                         color = Color.Black,
                         fontSize = 14.sp
                     )
-                }
+                    }
             }
 
             // Clear Button

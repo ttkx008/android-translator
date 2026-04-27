@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Live Translator</string>
+    <string name="start_conversation">开始对话</string>
+    <string name="stop_conversation">停止对话</string>
+    <string name="language_settings">语言设置</string>
+    <string name="source_language">源语言</string>
+    <string name="target_language">目标语言</string>
+    <string name="swap_languages">交换语言</string>
+    <string name="speaker_a">说话人 A</string>
+    <string name="speaker_b">说话人 B</string>
+    <string name="listening">正在听...</string>
+    <string name="no_speech_recognized">未识别到语音</string>
+    <string name="translation_ready">翻译完成</string>
+    <string name="permission_denied">麦克风权限被拒绝</string>
+</resources>

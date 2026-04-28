@@ -73,12 +73,8 @@ class TranslationManager(
                         "📱 客户端错误\n\n请重启应用后重试"
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> 
                         "🔒 权限不足\n\n请在设置中授予麦克风权限"
-                    SpeechRecognizer.ERROR_TOO_SHORT -> 
-                        "⏱️ 语音太短\n\n请说话时间长一些（至少1-2秒）"
                     SpeechRecognizer.ERROR_SERVER -> 
-                        "🖥️ 服务器错误\n\nGoogle 服务暂时不可用，请稍后重试"
-                    SpeechRecognizer.ERROR_SPEECH_UNAVAILABLE -> 
-                        "🚫 语音识别不可用\n\n请确保已安装 Google App"
+                        "🖥️ 服务器错误\n\n服务暂时不可用，请稍后重试"
                     else -> "❓ 未知错误 (代码: $error)\n\n请重启应用重试"
                 }
                 Log.e(TAG, "Speech recognition error: $errorMsg (code: $error)")

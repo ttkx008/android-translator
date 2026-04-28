@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,16 +19,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,10 +46,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -95,7 +103,10 @@ class MainActivity : ComponentActivity() {
                             viewModel.swapLanguages()
                         },
                         onSpeakTranslation = { message ->
-                            speakTranslation(message)
+                            // TTS 功能
+                        },
+                        onManageModels = {
+                            viewModel.showModelManager.value = true
                         }
                     )
                 }
@@ -141,11 +152,16 @@ class MainActivity : ComponentActivity() {
             },
             onProgress = { progress ->
                 runOnUiThread {
-                    viewModel.updateProgress(progress)
+                    viewModel.updateDownloadProgress(progress)
                 }
             }
         )
         offlineRecognizer?.initialize()
+        
+        // 更新已下载的模型列表
+        runOnUiThread {
+            viewModel.updateDownloadedModels(offlineRecognizer?.getDownloadedModels() ?: emptyList())
+        }
     }
 
     private fun startListeningForSpeaker(speaker: Speaker) {
@@ -179,17 +195,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun speakTranslation(message: ConversationMessage) {
-        val language = if (message.speaker == Speaker.A) viewModel.targetLanguage.value else viewModel.sourceLanguage.value
-        // 使用 Android 内置 TTS（离线可用）
-        val intent = android.content.Intent(android.speech.tts.TextToSpeech.Engine.ACTION_CHECK_TTS_DATA)
-        try {
-            startActivity(intent)
-        } catch (e: Exception) {
-            viewModel.onError("请安装 Google TTS 或其他 TTS 应用")
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         offlineRecognizer?.shutdown()
@@ -208,7 +213,9 @@ class TranslationViewModel {
     val isListening = MutableStateFlow(false)
     val currentListeningSpeaker = MutableStateFlow<Speaker?>(null)
     val errorMessage = MutableStateFlow<String?>(null)
-    val progressMessage = MutableStateFlow<String?>(null)
+    val downloadProgress = MutableStateFlow<OfflineSpeechRecognizer.DownloadProgress?>(null)
+    val downloadedModels = MutableStateFlow<List<String>>(emptyList())
+    val showModelManager = MutableStateFlow(false)
 
     private var nextId = 0L
 
@@ -246,7 +253,7 @@ class TranslationViewModel {
     fun listeningStarted() {
         isListening.value = true
         errorMessage.value = null
-        progressMessage.value = null
+        downloadProgress.value = null
     }
 
     fun onSpeechRecognized(text: String) {
@@ -261,7 +268,6 @@ class TranslationViewModel {
             messages.update { it + message }
         }
         errorMessage.value = null
-        progressMessage.value = null
     }
 
     fun translateCurrentText(translatedText: String) {
@@ -282,19 +288,25 @@ class TranslationViewModel {
     fun onError(error: String) {
         isListening.value = false
         errorMessage.value = error
-        progressMessage.value = null
+        downloadProgress.value = null
     }
 
-    fun updateProgress(message: String) {
-        progressMessage.value = message
-        errorMessage.value = null
+    fun updateDownloadProgress(progress: OfflineSpeechRecognizer.DownloadProgress) {
+        downloadProgress.value = progress
+    }
+    
+    fun onModelDownloadComplete() {
+        // 由 MainActivity 调用更新
+    }
+
+    fun updateDownloadedModels(models: List<String>) {
+        downloadedModels.value = models
     }
 
     fun clearConversation() {
         messages.value = emptyList()
         nextId = 0
         errorMessage.value = null
-        progressMessage.value = null
     }
 }
 
@@ -304,7 +316,8 @@ fun TranslatorScreen(
     viewModel: TranslationViewModel,
     onStartListening: (Speaker) -> Unit,
     onSwapLanguages: () -> Unit,
-    onSpeakTranslation: (ConversationMessage) -> Unit
+    onSpeakTranslation: (ConversationMessage) -> Unit,
+    onManageModels: () -> Unit
 ) {
     val messages by viewModel.messages.collectAsState()
     val sourceLanguage by viewModel.sourceLanguage.collectAsState()
@@ -312,13 +325,33 @@ fun TranslatorScreen(
     val isListening by viewModel.isListening.collectAsState()
     val currentListeningSpeaker by viewModel.currentListeningSpeaker.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
-    val progressMessage by viewModel.progressMessage.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isPermissionGranted by viewModel.isPermissionGranted.collectAsState()
+    val showModelManager by viewModel.showModelManager.collectAsState()
+    val downloadedModels by viewModel.downloadedModels.collectAsState()
+
+    if (showModelManager) {
+        ModelManagerDialog(
+            downloadedModels = downloadedModels,
+            onDismiss = { viewModel.showModelManager.value = false },
+            onDownload = { languageCode ->
+                offlineRecognizer?.downloadModel(languageCode)
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("🗣️ 实时对话翻译 (离线版)") }
+                title = { Text("🗣️ 实时对话翻译 (离线版)") },
+                actions = {
+                    IconButton(onClick = onManageModels) {
+                        Icon(
+                            Icons.Outlined.Download,
+                            contentDescription = "管理模型"
+                        )
+                    }
+                }
             )
         }
     ) { padding ->
@@ -337,6 +370,11 @@ fun TranslatorScreen(
                 onTargetChange = { viewModel.setTargetLanguage(it) },
                 onSwap = onSwapLanguages
             )
+
+            // Download Progress
+            downloadProgress?.let { progress ->
+                DownloadProgressCard(progress)
+            }
 
             // Conversation History
             LazyColumn(
@@ -363,10 +401,7 @@ fun TranslatorScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    "🎤",
-                                    fontSize = 48.sp
-                                )
+                                Text("🎤", fontSize = 48.sp)
                                 Text(
                                     "点击下方按钮开始对话",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -378,12 +413,20 @@ fun TranslatorScreen(
                                     textAlign = TextAlign.Center,
                                     fontSize = 12.sp
                                 )
-                                Text(
-                                    "💡 首次使用会自动下载语音模型（约50MB）",
-                                    color = MaterialTheme.colorScheme.primary,
-                                    textAlign = TextAlign.Center,
-                                    fontSize = 11.sp
-                                )
+                                if (downloadedModels.isEmpty()) {
+                                    Text(
+                                        "💡 首次使用需要下载语音模型",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        textAlign = TextAlign.Center,
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        "点击右上角 ⬇️ 管理模型",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        textAlign = TextAlign.Center,
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -394,33 +437,6 @@ fun TranslatorScreen(
                             sourceLang = if (message.speaker == Speaker.A) sourceLanguage else targetLanguage,
                             targetLang = if (message.speaker == Speaker.A) targetLanguage else sourceLanguage,
                             onSpeak = onSpeakTranslation
-                        )
-                    }
-                }
-            }
-
-            // Progress message
-            progressMessage?.let { progress ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Text(
-                            text = progress,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            fontSize = 14.sp
                         )
                     }
                 }
@@ -463,7 +479,7 @@ fun TranslatorScreen(
                 }
             }
 
-            // Microphone Buttons for both speakers
+            // Microphone Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -478,16 +494,13 @@ fun TranslatorScreen(
                             Color(0xFF1565C0) else Color(0xFFE3F2FD)
                     ),
                     shape = RoundedCornerShape(12.dp),
-                    enabled = !isListening
+                    enabled = !isListening && downloadProgress?.state != OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text(
-                            "🎤",
-                            fontSize = 24.sp
-                        )
+                        Text("🎤", fontSize = 24.sp)
                         Text(
                             "A (${sourceLanguage.code})",
                             color = if (isListening && currentListeningSpeaker == Speaker.A) 
@@ -507,16 +520,13 @@ fun TranslatorScreen(
                             Color(0xFF7B1FA2) else Color(0xFFF3E5F5)
                     ),
                     shape = RoundedCornerShape(12.dp),
-                    enabled = !isListening
+                    enabled = !isListening && downloadProgress?.state != OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text(
-                            "🎤",
-                            fontSize = 24.sp
-                        )
+                        Text("🎤", fontSize = 24.sp)
                         Text(
                             "B (${targetLanguage.code})",
                             color = if (isListening && currentListeningSpeaker == Speaker.B) 
@@ -555,6 +565,233 @@ fun TranslatorScreen(
             }
         }
     }
+}
+
+@Composable
+fun DownloadProgressCard(progress: OfflineSpeechRecognizer.DownloadProgress) {
+    val progressFloat = progress.progress / 100f
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when (progress.state) {
+                OfflineSpeechRecognizer.DownloadProgress.State.ERROR -> 
+                    MaterialTheme.colorScheme.errorContainer
+                OfflineSpeechRecognizer.DownloadProgress.State.READY -> 
+                    Color(0xFFE8F5E9)
+                else -> 
+                    MaterialTheme.colorScheme.secondaryContainer
+            }
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            when (progress.state) {
+                OfflineSpeechRecognizer.DownloadProgress.State.CHECKING -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("🔍 检查网络连接...")
+                    }
+                }
+                
+                OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "📥 下载语音模型",
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "${progress.progress}%",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    
+                    LinearProgressIndicator(
+                        progress = { progressFloat },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${progress.downloadedMB.toFixed(1)} / ${progress.totalMB.toFixed(1)} MB",
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
+                        if (progress.speedKBps > 0) {
+                            Text(
+                                "${progress.speedKBps.toFixed(0)} KB/s",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        if (progress.etaSeconds > 0) {
+                            Text(
+                                "剩余 ${formatTime(progress.etaSeconds)}",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+                
+                OfflineSpeechRecognizer.DownloadProgress.State.EXTRACTING -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("📦 解压模型文件...")
+                    }
+                }
+                
+                OfflineSpeechRecognizer.DownloadProgress.State.LOADING -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("🔄 加载语音模型...")
+                    }
+                }
+                
+                OfflineSpeechRecognizer.DownloadProgress.State.READY -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            "✅ 模型就绪！可以开始使用",
+                            color = Color(0xFF4CAF50),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                
+                OfflineSpeechRecognizer.DownloadProgress.State.ERROR -> {
+                    Text(
+                        text = progress.error,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+                
+                else -> {}
+            }
+        }
+    }
+}
+
+@Composable
+fun ModelManagerDialog(
+    downloadedModels: List<String>,
+    onDismiss: () -> Unit,
+    onDownload: (String) -> Unit
+) {
+    val selectedModels = remember { mutableStateListOf<String>() }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("📥 管理语音模型") },
+        text = {
+            Column {
+                Text(
+                    "选择需要下载的语言模型",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "💡 每个模型约 40-50MB，建议只下载需要的语言",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                OfflineSpeechRecognizer.MODELS.forEach { (code, info) ->
+                    val isDownloaded = downloadedModels.contains(code)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = selectedModels.contains(code) || isDownloaded,
+                            onCheckedChange = { checked ->
+                                if (!isDownloaded) {
+                                    if (checked) {
+                                        selectedModels.add(code)
+                                    } else {
+                                        selectedModels.remove(code)
+                                    }
+                                }
+                            },
+                            enabled = !isDownloaded
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "${info.displayName} (${code})",
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "约 ${info.sizeMB.toInt()} MB",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        if (isDownloaded) {
+                            Icon(
+                                Icons.Outlined.Check,
+                                contentDescription = "已下载",
+                                tint = Color(0xFF4CAF50)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    selectedModels.forEach { code ->
+                        onDownload(code)
+                    }
+                    selectedModels.clear()
+                    onDismiss()
+                },
+                enabled = selectedModels.isNotEmpty()
+            ) {
+                Text("下载选中 (${selectedModels.size})")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -694,15 +931,8 @@ fun MessageBubble(
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
-                IconButton(
-                    onClick = { onSpeak(message) },
-                    modifier = Modifier.clip(CircleShape)
-                ) {
-                    Text("🔊", fontSize = 16.sp)
-                }
             }
 
-            // Original text
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
@@ -717,7 +947,6 @@ fun MessageBubble(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Translated text
             Text(
                 "↓ ${targetLang.name}",
                 fontSize = 12.sp,
@@ -739,4 +968,15 @@ fun MessageBubble(
             }
         }
     }
+}
+
+// 辅助函数
+fun Float.toFixed(decimals: Int): String {
+    return String.format("%.${decimals}f", this)
+}
+
+fun formatTime(seconds: Int): String {
+    val mins = seconds / 60
+    val secs = seconds % 60
+    return if (mins > 0) "${mins}分${secs}秒" else "${secs}秒"
 }

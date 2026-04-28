@@ -1,6 +1,8 @@
 package com.example.livetranslator
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -9,6 +11,7 @@ import org.vosk.android.SpeechService
 import org.vosk.android.StorageService
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipInputStream
 
@@ -17,7 +20,7 @@ class OfflineSpeechRecognizer(
     private val onResult: (String, Boolean) -> Unit,
     private val onError: (String) -> Unit,
     private val onListeningStart: () -> Unit,
-    private val onProgress: (String) -> Unit = {}
+    private val onProgress: (DownloadProgress) -> Unit = {}
 ) {
     private var model: Model? = null
     private var speechService: SpeechService? = null
@@ -26,42 +29,99 @@ class OfflineSpeechRecognizer(
     private var isListening = false
     private var currentLanguage = "zh"
 
+    data class DownloadProgress(
+        val state: State,
+        val languageCode: String = "",
+        val progress: Int = 0,           // 0-100
+        val downloadedMB: Float = 0f,
+        val totalMB: Float = 0f,
+        val speedKBps: Float = 0f,
+        val etaSeconds: Int = 0,
+        val error: String = ""
+    ) {
+        enum class State {
+            IDLE, CHECKING, DOWNLOADING, EXTRACTING, LOADING, READY, ERROR
+        }
+    }
+
     companion object {
         private const val TAG = "OfflineSpeechRecognizer"
         
-        // Vosk 模型下载链接
-        private val MODEL_URLS = mapOf(
-            "zh" to "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
-            "en" to "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
-            "ja" to "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
-            "ko" to "https://alphacephei.com/vosk/models/vosk-model-small-ko-0.22.zip",
-            "fr" to "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
-            "de" to "https://alphacephei.com/vosk/models/vosk-model-small-de-0.22.zip",
-            "es" to "https://alphacephei.com/vosk/models/vosk-model-small-es-0.22.zip",
-            "ru" to "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
+        // Vosk 模型信息
+        data class ModelInfo(
+            val url: String,
+            val name: String,
+            val displayName: String,
+            val sizeMB: Float
         )
         
-        private val MODEL_NAMES = mapOf(
-            "zh" to "vosk-model-small-cn-0.22",
-            "en" to "vosk-model-small-en-us-0.15",
-            "ja" to "vosk-model-small-ja-0.22",
-            "ko" to "vosk-model-small-ko-0.22",
-            "fr" to "vosk-model-small-fr-0.22",
-            "de" to "vosk-model-small-de-0.22",
-            "es" to "vosk-model-small-es-0.22",
-            "ru" to "vosk-model-small-ru-0.22"
+        val MODELS = mapOf(
+            "zh" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
+                "vosk-model-small-cn-0.22",
+                "中文",
+                42f
+            ),
+            "en" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+                "vosk-model-small-en-us-0.15",
+                "English",
+                40f
+            ),
+            "ja" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
+                "vosk-model-small-ja-0.22",
+                "日本語",
+                45f
+            ),
+            "ko" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-ko-0.22.zip",
+                "vosk-model-small-ko-0.22",
+                "한국어",
+                42f
+            ),
+            "fr" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
+                "vosk-model-small-fr-0.22",
+                "Français",
+                41f
+            ),
+            "de" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-de-0.22.zip",
+                "vosk-model-small-de-0.22",
+                "Deutsch",
+                41f
+            ),
+            "es" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-es-0.22.zip",
+                "vosk-model-small-es-0.22",
+                "Español",
+                41f
+            ),
+            "ru" to ModelInfo(
+                "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
+                "vosk-model-small-ru-0.22",
+                "Русский",
+                42f
+            )
         )
+    }
+
+    private fun checkNetwork(): Boolean {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     fun initialize() {
         Log.d(TAG, "Initializing offline speech recognizer...")
-        // 模型会在首次使用时按需下载
         isInitialized = true
     }
 
     private fun getModelDir(languageCode: String): File {
-        val modelName = MODEL_NAMES[languageCode] ?: "vosk-model-small-cn-0.22"
-        return File(context.filesDir, "models/$modelName")
+        val modelInfo = MODELS[languageCode] ?: MODELS["zh"]!!
+        return File(context.filesDir, "models/${modelInfo.name}")
     }
 
     private fun isModelDownloaded(languageCode: String): Boolean {
@@ -69,58 +129,165 @@ class OfflineSpeechRecognizer(
         return modelDir.exists() && modelDir.listFiles()?.isNotEmpty() == true
     }
 
-    private fun downloadModel(languageCode: String, callback: (Boolean, String?) -> Unit) {
-        val url = MODEL_URLS[languageCode] ?: MODEL_URLS["zh"]!!
-        val modelName = MODEL_NAMES[languageCode] ?: "vosk-model-small-cn-0.22"
+    fun getDownloadedModels(): List<String> {
+        return MODELS.keys.filter { isModelDownloaded(it) }
+    }
+
+    fun downloadModel(languageCode: String) {
+        if (!checkNetwork()) {
+            onProgress(DownloadProgress(
+                state = DownloadProgress.State.ERROR,
+                languageCode = languageCode,
+                error = "❌ 无网络连接\n\n请检查：\n1. WiFi 或移动数据是否开启\n2. 是否处于飞行模式"
+            ))
+            return
+        }
+
+        val modelInfo = MODELS[languageCode] ?: return
         val modelDir = File(context.filesDir, "models")
-        val targetDir = File(modelDir, modelName)
+        val targetDir = File(modelDir, modelInfo.name)
+
+        onProgress(DownloadProgress(
+            state = DownloadProgress.State.CHECKING,
+            languageCode = languageCode
+        ))
 
         Thread {
             try {
-                onProgress("📥 正在下载语音模型（约 50MB）...")
-                Log.d(TAG, "Downloading model from: $url")
+                onProgress(DownloadProgress(
+                    state = DownloadProgress.State.DOWNLOADING,
+                    languageCode = languageCode,
+                    totalMB = modelInfo.sizeMB
+                ))
+                
+                Log.d(TAG, "Downloading model from: ${modelInfo.url}")
                 
                 // 创建目录
                 modelDir.mkdirs()
                 
-                // 下载 zip 文件
-                val connection = URL(url).openConnection()
-                val inputStream = connection.getInputStream()
-                val zipInputStream = ZipInputStream(inputStream)
+                // 打开连接
+                val connection = URL(modelInfo.url).openConnection() as HttpURLConnection
+                connection.connectTimeout = 15000
+                connection.readTimeout = 30000
+                connection.connect()
                 
-                // 解压到目标目录
+                val contentLength = connection.contentLength.toLong()
+                val inputStream = connection.inputStream
+                
+                // 下载到临时文件
+                val tempFile = File(modelDir, "${modelInfo.name}.zip.tmp")
+                val outputStream = FileOutputStream(tempFile)
+                
+                val buffer = ByteArray(8192)
+                var totalRead = 0L
+                var lastProgressUpdate = System.currentTimeMillis()
+                var lastBytesRead = 0L
+                var currentSpeed = 0f
+                
+                inputStream.use { input ->
+                    outputStream.use { output ->
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            totalRead += bytesRead
+                            
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressUpdate > 500) { // 每 500ms 更新一次
+                                val timeDiff = (now - lastProgressUpdate) / 1000f
+                                val bytesDiff = totalRead - lastBytesRead
+                                currentSpeed = (bytesDiff / timeDiff / 1024).toFloat()
+                                
+                                val progress = if (contentLength > 0) {
+                                    (totalRead * 100 / contentLength).toInt()
+                                } else {
+                                    0
+                                }
+                                
+                                val downloadedMB = totalRead / 1024f / 1024f
+                                val eta = if (currentSpeed > 0 && contentLength > 0) {
+                                    ((contentLength - totalRead) / (currentSpeed * 1024)).toInt()
+                                } else {
+                                    0
+                                }
+                                
+                                onProgress(DownloadProgress(
+                                    state = DownloadProgress.State.DOWNLOADING,
+                                    languageCode = languageCode,
+                                    progress = progress,
+                                    downloadedMB = downloadedMB,
+                                    totalMB = modelInfo.sizeMB,
+                                    speedKBps = currentSpeed,
+                                    etaSeconds = eta
+                                ))
+                                
+                                lastProgressUpdate = now
+                                lastBytesRead = totalRead
+                            }
+                        }
+                    }
+                }
+                
+                outputStream.close()
+                inputStream.close()
+                
+                // 解压
+                onProgress(DownloadProgress(
+                    state = DownloadProgress.State.EXTRACTING,
+                    languageCode = languageCode,
+                    progress = 100
+                ))
+                
                 targetDir.mkdirs()
+                val zipInputStream = ZipInputStream(tempFile.inputStream())
                 var entry = zipInputStream.nextEntry
                 while (entry != null) {
                     val filePath = File(targetDir, entry.name)
-                    
                     if (entry.isDirectory) {
                         filePath.mkdirs()
                     } else {
-                        // 确保父目录存在
                         filePath.parentFile?.mkdirs()
-                        
-                        // 解压文件
-                        FileOutputStream(filePath).use { outputStream ->
-                            zipInputStream.copyTo(outputStream)
+                        FileOutputStream(filePath).use { output ->
+                            zipInputStream.copyTo(output)
                         }
                     }
-                    
                     zipInputStream.closeEntry()
                     entry = zipInputStream.nextEntry
                 }
-                
                 zipInputStream.close()
-                inputStream.close()
+                
+                // 删除临时文件
+                tempFile.delete()
                 
                 Log.d(TAG, "Model downloaded and extracted to: ${targetDir.absolutePath}")
-                callback(true, null)
+                
+                onProgress(DownloadProgress(
+                    state = DownloadProgress.State.READY,
+                    languageCode = languageCode,
+                    progress = 100,
+                    downloadedMB = modelInfo.sizeMB,
+                    totalMB = modelInfo.sizeMB
+                ))
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to download model", e)
-                // 清理失败的下载
                 targetDir.deleteRecursively()
-                callback(false, "下载失败: ${e.message}")
+                
+                val errorMsg = when {
+                    e.message?.contains("timeout", true) == true ->
+                        "⏱️ 下载超时\n\n网络连接不稳定，请重试"
+                    e.message?.contains("connect", true) == true ->
+                        "🔌 连接失败\n\n无法连接到下载服务器\n请检查网络设置"
+                    e.message?.contains("ENOSPC", true) == true ->
+                        "💾 存储空间不足\n\n请清理手机存储后重试"
+                    else ->
+                        "❌ 下载失败: ${e.message}"
+                }
+                
+                onProgress(DownloadProgress(
+                    state = DownloadProgress.State.ERROR,
+                    languageCode = languageCode,
+                    error = errorMsg
+                ))
             }
         }.start()
     }
@@ -129,38 +296,39 @@ class OfflineSpeechRecognizer(
         val modelDir = getModelDir(languageCode)
         
         if (!isModelDownloaded(languageCode)) {
-            // 需要下载模型
-            downloadModel(languageCode) { success, error ->
-                if (success) {
-                    loadModelFromDir(modelDir, callback)
-                } else {
-                    callback(false, error)
-                }
-            }
-        } else {
-            // 模型已存在，直接加载
-            loadModelFromDir(modelDir, callback)
+            callback(false, "模型未下载")
+            return
         }
-    }
 
-    private fun loadModelFromDir(modelDir: File, callback: (Boolean, String?) -> Unit) {
-        try {
-            // 关闭旧模型
-            speechService?.stop()
-            speechService?.shutdown()
-            recognizer?.close()
-            model?.close()
-            
-            // 加载新模型
-            model = Model(modelDir.absolutePath)
-            recognizer = Recognizer(model, 16000.0f)
-            speechService = SpeechService(recognizer, 16000.0f)
-            
-            callback(true, null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load model", e)
-            callback(false, "加载模型失败: ${e.message}")
-        }
+        onProgress(DownloadProgress(
+            state = DownloadProgress.State.LOADING,
+            languageCode = languageCode
+        ))
+
+        Thread {
+            try {
+                // 关闭旧模型
+                speechService?.stop()
+                speechService?.shutdown()
+                recognizer?.close()
+                model?.close()
+                
+                // 加载新模型
+                model = Model(modelDir.absolutePath)
+                recognizer = Recognizer(model, 16000.0f)
+                speechService = SpeechService(recognizer, 16000.0f)
+                
+                onProgress(DownloadProgress(
+                    state = DownloadProgress.State.READY,
+                    languageCode = languageCode
+                ))
+                
+                callback(true, null)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load model", e)
+                callback(false, "加载模型失败: ${e.message}")
+            }
+        }.start()
     }
 
     fun startListening(languageCode: String) {
@@ -177,16 +345,21 @@ class OfflineSpeechRecognizer(
         currentLanguage = languageCode
 
         // 检查并加载模型
-        onProgress("🔄 正在加载语音模型...")
-        
+        if (!isModelDownloaded(languageCode)) {
+            onProgress(DownloadProgress(
+                state = DownloadProgress.State.CHECKING,
+                languageCode = languageCode
+            ))
+            // 自动开始下载
+            downloadModel(languageCode)
+            return
+        }
+
         loadModel(languageCode) { success, error ->
             if (success) {
-                // 开始监听
                 try {
                     speechService?.startListening(object : RecognitionListener {
-                        override fun onPartialResult(hypothesis: String?) {
-                            // 部分结果（实时显示）
-                        }
+                        override fun onPartialResult(hypothesis: String?) {}
 
                         override fun onResult(hypothesis: String?) {
                             hypothesis?.let {

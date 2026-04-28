@@ -34,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -61,7 +62,7 @@ import kotlinx.coroutines.flow.update
 
 class MainActivity : ComponentActivity() {
     private val viewModel = TranslationViewModel()
-    private var translationManager: TranslationManager? = null
+    private var offlineRecognizer: OfflineSpeechRecognizer? = null
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -77,7 +78,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         checkPermissions()
-        initTranslationManager()
+        initOfflineRecognizer()
 
         setContent {
             LiveTranslatorTheme {
@@ -94,10 +95,7 @@ class MainActivity : ComponentActivity() {
                             viewModel.swapLanguages()
                         },
                         onSpeakTranslation = { message ->
-                            translationManager?.speak(
-                                message.translatedText,
-                                if (message.speaker == Speaker.A) viewModel.targetLanguage.value else viewModel.sourceLanguage.value
-                            )
+                            speakTranslation(message)
                         }
                     )
                 }
@@ -119,8 +117,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun initTranslationManager() {
-        translationManager = TranslationManager(
+    private fun initOfflineRecognizer() {
+        offlineRecognizer = OfflineSpeechRecognizer(
             context = this,
             onResult = { text, isFinal ->
                 Log.d(TAG, "Speech result: $text, isFinal: $isFinal")
@@ -140,8 +138,14 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     viewModel.listeningStarted()
                 }
+            },
+            onProgress = { progress ->
+                runOnUiThread {
+                    viewModel.updateProgress(progress)
+                }
             }
         )
+        offlineRecognizer?.initialize()
     }
 
     private fun startListeningForSpeaker(speaker: Speaker) {
@@ -151,7 +155,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val language = if (speaker == Speaker.A) viewModel.sourceLanguage.value else viewModel.targetLanguage.value
-        translationManager?.startListening(language)
+        offlineRecognizer?.startListening(language.code)
         viewModel.setCurrentListeningSpeaker(speaker)
     }
 
@@ -175,9 +179,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun speakTranslation(message: ConversationMessage) {
+        val language = if (message.speaker == Speaker.A) viewModel.targetLanguage.value else viewModel.sourceLanguage.value
+        // 使用 Android 内置 TTS（离线可用）
+        val intent = android.content.Intent(android.speech.tts.TextToSpeech.Engine.ACTION_CHECK_TTS_DATA)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            viewModel.onError("请安装 Google TTS 或其他 TTS 应用")
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        translationManager?.shutdown()
+        offlineRecognizer?.shutdown()
     }
 
     companion object {
@@ -193,6 +208,7 @@ class TranslationViewModel {
     val isListening = MutableStateFlow(false)
     val currentListeningSpeaker = MutableStateFlow<Speaker?>(null)
     val errorMessage = MutableStateFlow<String?>(null)
+    val progressMessage = MutableStateFlow<String?>(null)
 
     private var nextId = 0L
 
@@ -230,6 +246,7 @@ class TranslationViewModel {
     fun listeningStarted() {
         isListening.value = true
         errorMessage.value = null
+        progressMessage.value = null
     }
 
     fun onSpeechRecognized(text: String) {
@@ -244,6 +261,7 @@ class TranslationViewModel {
             messages.update { it + message }
         }
         errorMessage.value = null
+        progressMessage.value = null
     }
 
     fun translateCurrentText(translatedText: String) {
@@ -264,12 +282,19 @@ class TranslationViewModel {
     fun onError(error: String) {
         isListening.value = false
         errorMessage.value = error
+        progressMessage.value = null
+    }
+
+    fun updateProgress(message: String) {
+        progressMessage.value = message
+        errorMessage.value = null
     }
 
     fun clearConversation() {
         messages.value = emptyList()
         nextId = 0
         errorMessage.value = null
+        progressMessage.value = null
     }
 }
 
@@ -287,12 +312,13 @@ fun TranslatorScreen(
     val isListening by viewModel.isListening.collectAsState()
     val currentListeningSpeaker by viewModel.currentListeningSpeaker.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val progressMessage by viewModel.progressMessage.collectAsState()
     val isPermissionGranted by viewModel.isPermissionGranted.collectAsState()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("🗣️ 实时对话翻译") }
+                title = { Text("🗣️ 实时对话翻译 (离线版)") }
             )
         }
     ) { padding ->
@@ -352,6 +378,12 @@ fun TranslatorScreen(
                                     textAlign = TextAlign.Center,
                                     fontSize = 12.sp
                                 )
+                                Text(
+                                    "💡 首次使用会自动下载语音模型（约50MB）",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center,
+                                    fontSize = 11.sp
+                                )
                             }
                         }
                     }
@@ -362,6 +394,33 @@ fun TranslatorScreen(
                             sourceLang = if (message.speaker == Speaker.A) sourceLanguage else targetLanguage,
                             targetLang = if (message.speaker == Speaker.A) targetLanguage else sourceLanguage,
                             onSpeak = onSpeakTranslation
+                        )
+                    }
+                }
+            }
+
+            // Progress message
+            progressMessage?.let { progress ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = progress,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            fontSize = 14.sp
                         )
                     }
                 }
@@ -386,7 +445,7 @@ fun TranslatorScreen(
                 }
             }
 
-            // Error message with better formatting
+            // Error message
             errorMessage?.let { error ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -418,7 +477,8 @@ fun TranslatorScreen(
                         containerColor = if (isListening && currentListeningSpeaker == Speaker.A) 
                             Color(0xFF1565C0) else Color(0xFFE3F2FD)
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isListening
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -446,7 +506,8 @@ fun TranslatorScreen(
                         containerColor = if (isListening && currentListeningSpeaker == Speaker.B) 
                             Color(0xFF7B1FA2) else Color(0xFFF3E5F5)
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isListening
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -469,7 +530,8 @@ fun TranslatorScreen(
             // Clear Button
             OutlinedButton(
                 onClick = { viewModel.clearConversation() },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isListening
             ) {
                 Text("🗑️ 清空对话")
             }

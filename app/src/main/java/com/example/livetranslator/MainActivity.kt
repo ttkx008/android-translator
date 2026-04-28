@@ -158,6 +158,11 @@ class MainActivity : ComponentActivity() {
         )
         offlineRecognizer?.initialize()
         
+        // 设置下载模型的函数
+        viewModel.setDownloadModelFunc { languageCode ->
+            offlineRecognizer?.downloadModel(languageCode)
+        }
+        
         // 更新已下载的模型列表
         runOnUiThread {
             viewModel.updateDownloadedModels(offlineRecognizer?.getDownloadedModels() ?: emptyList())
@@ -295,8 +300,14 @@ class TranslationViewModel {
         downloadProgress.value = progress
     }
     
-    fun onModelDownloadComplete() {
-        // 由 MainActivity 调用更新
+    private var downloadModelFunc: ((String) -> Unit)? = null
+    
+    fun setDownloadModelFunc(func: (String) -> Unit) {
+        downloadModelFunc = func
+    }
+    
+    fun onDownloadModel(languageCode: String) {
+        downloadModelFunc?.invoke(languageCode)
     }
 
     fun updateDownloadedModels(models: List<String>) {
@@ -335,7 +346,7 @@ fun TranslatorScreen(
             downloadedModels = downloadedModels,
             onDismiss = { viewModel.showModelManager.value = false },
             onDownload = { languageCode ->
-                offlineRecognizer?.downloadModel(languageCode)
+                viewModel.onDownloadModel(languageCode)
             }
         )
     }

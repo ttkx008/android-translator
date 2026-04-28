@@ -28,6 +28,11 @@ class OfflineSpeechRecognizer(
     private var isInitialized = false
     private var isListening = false
     private var currentLanguage = "zh"
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    
+    private fun runOnMain(block: () -> Unit) {
+        mainHandler.post(block)
+    }
 
     data class DownloadProgress(
         val state: State,
@@ -135,11 +140,13 @@ class OfflineSpeechRecognizer(
 
     fun downloadModel(languageCode: String) {
         if (!checkNetwork()) {
-            onProgress(DownloadProgress(
-                state = DownloadProgress.State.ERROR,
-                languageCode = languageCode,
-                error = "❌ 无网络连接\n\n请检查：\n1. WiFi 或移动数据是否开启\n2. 是否处于飞行模式"
-            ))
+            runOnMain {
+                runOnMain { onProgress(DownloadProgress(
+                    state = DownloadProgress.State.ERROR,
+                    languageCode = languageCode,
+                    error = "❌ 无网络连接\n\n请检查：\n1. WiFi 或移动数据是否开启\n2. 是否处于飞行模式"
+                )) }
+            }
             return
         }
 
@@ -147,18 +154,20 @@ class OfflineSpeechRecognizer(
         val modelDir = File(context.filesDir, "models")
         val targetDir = File(modelDir, modelInfo.name)
 
-        onProgress(DownloadProgress(
-            state = DownloadProgress.State.CHECKING,
-            languageCode = languageCode
-        ))
+        runOnMain {
+            onProgress(DownloadProgress(
+                state = DownloadProgress.State.CHECKING,
+                languageCode = languageCode
+            ))
+        }
 
         Thread {
             try {
-                onProgress(DownloadProgress(
+                runOnMain { onProgress(DownloadProgress(
                     state = DownloadProgress.State.DOWNLOADING,
                     languageCode = languageCode,
                     totalMB = modelInfo.sizeMB
-                ))
+                )) }
                 
                 Log.d(TAG, "Downloading model from: ${modelInfo.url}")
                 
@@ -210,7 +219,7 @@ class OfflineSpeechRecognizer(
                                     0
                                 }
                                 
-                                onProgress(DownloadProgress(
+                                runOnMain { onProgress(DownloadProgress(
                                     state = DownloadProgress.State.DOWNLOADING,
                                     languageCode = languageCode,
                                     progress = progress,
@@ -218,7 +227,7 @@ class OfflineSpeechRecognizer(
                                     totalMB = modelInfo.sizeMB,
                                     speedKBps = currentSpeed,
                                     etaSeconds = eta
-                                ))
+                                )) }
                                 
                                 lastProgressUpdate = now
                                 lastBytesRead = totalRead
@@ -231,11 +240,11 @@ class OfflineSpeechRecognizer(
                 inputStream.close()
                 
                 // 解压
-                onProgress(DownloadProgress(
+                runOnMain { onProgress(DownloadProgress(
                     state = DownloadProgress.State.EXTRACTING,
                     languageCode = languageCode,
                     progress = 100
-                ))
+                )) }
                 
                 targetDir.mkdirs()
                 val zipInputStream = ZipInputStream(tempFile.inputStream())
@@ -260,13 +269,13 @@ class OfflineSpeechRecognizer(
                 
                 Log.d(TAG, "Model downloaded and extracted to: ${targetDir.absolutePath}")
                 
-                onProgress(DownloadProgress(
+                runOnMain { onProgress(DownloadProgress(
                     state = DownloadProgress.State.READY,
                     languageCode = languageCode,
                     progress = 100,
                     downloadedMB = modelInfo.sizeMB,
                     totalMB = modelInfo.sizeMB
-                ))
+                )) }
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to download model", e)
@@ -283,11 +292,11 @@ class OfflineSpeechRecognizer(
                         "❌ 下载失败: ${e.message}"
                 }
                 
-                onProgress(DownloadProgress(
+                runOnMain { onProgress(DownloadProgress(
                     state = DownloadProgress.State.ERROR,
                     languageCode = languageCode,
                     error = errorMsg
-                ))
+                )) }
             }
         }.start()
     }
@@ -300,10 +309,12 @@ class OfflineSpeechRecognizer(
             return
         }
 
-        onProgress(DownloadProgress(
-            state = DownloadProgress.State.LOADING,
-            languageCode = languageCode
-        ))
+        runOnMain {
+            onProgress(DownloadProgress(
+                state = DownloadProgress.State.LOADING,
+                languageCode = languageCode
+            ))
+        }
 
         Thread {
             try {
@@ -318,10 +329,10 @@ class OfflineSpeechRecognizer(
                 recognizer = Recognizer(model, 16000.0f)
                 speechService = SpeechService(recognizer, 16000.0f)
                 
-                onProgress(DownloadProgress(
+                runOnMain { onProgress(DownloadProgress(
                     state = DownloadProgress.State.READY,
                     languageCode = languageCode
-                ))
+                )) }
                 
                 callback(true, null)
             } catch (e: Exception) {
@@ -346,10 +357,12 @@ class OfflineSpeechRecognizer(
 
         // 检查并加载模型
         if (!isModelDownloaded(languageCode)) {
-            onProgress(DownloadProgress(
-                state = DownloadProgress.State.CHECKING,
-                languageCode = languageCode
-            ))
+            runOnMain {
+                onProgress(DownloadProgress(
+                    state = DownloadProgress.State.CHECKING,
+                    languageCode = languageCode
+                ))
+            }
             // 自动开始下载
             downloadModel(languageCode)
             return

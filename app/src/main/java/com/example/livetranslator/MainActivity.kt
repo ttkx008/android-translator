@@ -3,6 +3,7 @@ package com.example.livetranslator
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -48,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -119,17 +123,23 @@ class MainActivity : ComponentActivity() {
         translationManager = TranslationManager(
             context = this,
             onResult = { text, isFinal ->
+                Log.d(TAG, "Speech result: $text, isFinal: $isFinal")
                 if (isFinal) {
                     viewModel.onSpeechRecognized(text)
-                    // Translate (for demo, we just swap languages - in production, call translation API)
                     translateText(text)
                 }
             },
             onError = { error ->
-                viewModel.onError(error)
+                Log.e(TAG, "Speech error: $error")
+                runOnUiThread {
+                    viewModel.onError(error)
+                }
             },
             onListeningStart = {
-                viewModel.listeningStarted()
+                Log.d(TAG, "Listening started")
+                runOnUiThread {
+                    viewModel.listeningStarted()
+                }
             }
         )
     }
@@ -169,6 +179,10 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         translationManager?.shutdown()
     }
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
 }
 
 class TranslationViewModel {
@@ -189,7 +203,7 @@ class TranslationViewModel {
 
     fun permissionDenied() {
         isPermissionGranted.value = false
-        errorMessage.value = "麦克风权限被拒绝，无法使用语音输入"
+        errorMessage.value = "🔒 麦克风权限被拒绝\n\n请在设置中授予麦克风权限才能使用语音输入"
     }
 
     fun swapLanguages() {
@@ -210,21 +224,22 @@ class TranslationViewModel {
     fun setCurrentListeningSpeaker(speaker: Speaker) {
         currentListeningSpeaker.value = speaker
         isListening.value = true
+        errorMessage.value = null
     }
 
     fun listeningStarted() {
         isListening.value = true
+        errorMessage.value = null
     }
 
     fun onSpeechRecognized(text: String) {
         isListening.value = false
         currentListeningSpeaker.value?.let { speaker ->
-            // Add the original text
             val message = ConversationMessage(
                 id = nextId++,
                 speaker = speaker,
                 originalText = text,
-                translatedText = "Translating..."
+                translatedText = "翻译中..."
             )
             messages.update { it + message }
         }
@@ -233,8 +248,6 @@ class TranslationViewModel {
 
     fun translateCurrentText(translatedText: String) {
         currentListeningSpeaker.value?.let { speaker ->
-            // The last message is the one we just added with "Translating..."
-            // Update it with the real translated text
             messages.update { currentMessages ->
                 currentMessages.map { msg ->
                     if (msg.id == currentMessages.lastOrNull()?.id) {
@@ -244,7 +257,6 @@ class TranslationViewModel {
                     }
                 }
             }
-
             errorMessage.value = null
         }
     }
@@ -257,6 +269,7 @@ class TranslationViewModel {
     fun clearConversation() {
         messages.value = emptyList()
         nextId = 0
+        errorMessage.value = null
     }
 }
 
@@ -279,7 +292,7 @@ fun TranslatorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("实时对话翻译") }
+                title = { Text("🗣️ 实时对话翻译") }
             )
         }
     ) { padding ->
@@ -320,11 +333,26 @@ fun TranslatorScreen(
                                 .padding(32.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "点击下方按钮开始对话\n\n说话人 A: ${sourceLanguage.name}\n说话人 B: ${targetLanguage.name}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "🎤",
+                                    fontSize = 48.sp
+                                )
+                                Text(
+                                    "点击下方按钮开始对话",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    "说话人 A: ${sourceLanguage.name}\n说话人 B: ${targetLanguage.name}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
                 } else {
@@ -341,20 +369,39 @@ fun TranslatorScreen(
 
             // Status
             if (isListening) {
-                Text(
-                    "🔴 正在听... (${currentListeningSpeaker?.name ?: ""})",
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
+                Row(
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        "🔴 正在听 ${currentListeningSpeaker?.name ?: ""} 说话...",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
-            errorMessage?.let {
-                Text(
-                    "⚠️ $it",
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
+            // Error message with better formatting
+            errorMessage?.let { error ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp),
+                        fontSize = 14.sp
+                    )
+                }
             }
 
             // Microphone Buttons for both speakers
@@ -364,37 +411,57 @@ fun TranslatorScreen(
             ) {
                 Button(
                     onClick = { onStartListening(Speaker.A) },
-                    modifier = Modifier.weight(1f)
-                        .height(64.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(72.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFE3F2FD)
+                        containerColor = if (isListening && currentListeningSpeaker == Speaker.A) 
+                            Color(0xFF1565C0) else Color(0xFFE3F2FD)
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "🎤\nA (${sourceLanguage.code})",
-                        color = Color.Black,
-                        fontSize = 14.sp
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            "🎤",
+                            fontSize = 24.sp
+                        )
+                        Text(
+                            "A (${sourceLanguage.code})",
+                            color = if (isListening && currentListeningSpeaker == Speaker.A) 
+                                Color.White else Color.Black,
+                            fontSize = 12.sp
+                        )
                     }
                 }
 
                 Button(
                     onClick = { onStartListening(Speaker.B) },
-                    modifier = Modifier.weight(1f)
-                        .height(64.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(72.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFF3E5F5)
+                        containerColor = if (isListening && currentListeningSpeaker == Speaker.B) 
+                            Color(0xFF7B1FA2) else Color(0xFFF3E5F5)
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "🎤\nB (${targetLanguage.code})",
-                        color = Color.Black,
-                        fontSize = 14.sp
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            "🎤",
+                            fontSize = 24.sp
+                        )
+                        Text(
+                            "B (${targetLanguage.code})",
+                            color = if (isListening && currentListeningSpeaker == Speaker.B) 
+                                Color.White else Color.Black,
+                            fontSize = 12.sp
+                        )
                     }
                 }
             }
@@ -404,15 +471,25 @@ fun TranslatorScreen(
                 onClick = { viewModel.clearConversation() },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("清空对话")
+                Text("🗑️ 清空对话")
             }
 
+            // Permission hint
             if (!isPermissionGranted) {
-                Text(
-                    "⚠️ 需要麦克风权限才能使用语音输入",
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        "⚠️ 需要麦克风权限才能使用语音输入\n请点击上方按钮授予权限",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp),
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
     }
@@ -453,8 +530,9 @@ fun LanguageSelector(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
-                    "源语言: ${sourceLanguage.name}",
-                    modifier = Modifier.padding(12.dp)
+                    "源: ${sourceLanguage.name}",
+                    modifier = Modifier.padding(12.dp),
+                    fontSize = 14.sp
                 )
             }
             ExposedDropdownMenu(
@@ -481,7 +559,7 @@ fun LanguageSelector(
         ) {
             Icon(
                 Icons.Outlined.SwapHoriz,
-                contentDescription = "Swap languages",
+                contentDescription = "交换语言",
                 tint = MaterialTheme.colorScheme.onPrimaryContainer
             )
         }
@@ -498,8 +576,9 @@ fun LanguageSelector(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
-                    "目标语言: ${targetLanguage.name}",
-                    modifier = Modifier.padding(12.dp)
+                    "目标: ${targetLanguage.name}",
+                    modifier = Modifier.padding(12.dp),
+                    fontSize = 14.sp
                 )
             }
             ExposedDropdownMenu(
@@ -555,8 +634,7 @@ fun MessageBubble(
                 )
                 IconButton(
                     onClick = { onSpeak(message) },
-                    modifier = Modifier
-                        .clip(CircleShape)
+                    modifier = Modifier.clip(CircleShape)
                 ) {
                     Text("🔊", fontSize = 16.sp)
                 }

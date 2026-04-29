@@ -58,9 +58,8 @@ class OfflineSpeechRecognizer(
             val urls: List<String>  // 多源下载，按优先级排列
         )
 
-        // HuggingFace 国内镜像 + 官方源作为备用
-        private const val HF_MIRROR = "https://hf-mirror.com"
-        private const val HF_ORIGINAL = "https://huggingface.co"
+        // 下载源优先级: GitHub Release (国内快) → alphacephei (官方)
+        private const val GITHUB_RELEASE = "https://github.com/ttkx008/android-translator/releases/download/models-v1"
         private const val ALPHACEPHEI = "https://alphacephei.com/vosk/models"
 
         val MODELS = mapOf(
@@ -69,8 +68,7 @@ class OfflineSpeechRecognizer(
                 "中文",
                 42f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-cn-0.22/resolve/main/vosk-model-small-cn-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-cn-0.22/resolve/main/vosk-model-small-cn-0.22.zip",
+                    "$GITHUB_RELEASE/vosk-model-small-cn-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-cn-0.22.zip"
                 )
             ),
@@ -79,8 +77,6 @@ class OfflineSpeechRecognizer(
                 "English",
                 40f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-en-us-0.15/resolve/main/vosk-model-small-en-us-0.15.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-en-us-0.15/resolve/main/vosk-model-small-en-us-0.15.zip",
                     "$ALPHACEPHEI/vosk-model-small-en-us-0.15.zip"
                 )
             ),
@@ -89,8 +85,6 @@ class OfflineSpeechRecognizer(
                 "日本語",
                 45f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-ja-0.22/resolve/main/vosk-model-small-ja-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-ja-0.22/resolve/main/vosk-model-small-ja-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-ja-0.22.zip"
                 )
             ),
@@ -99,8 +93,6 @@ class OfflineSpeechRecognizer(
                 "한국어",
                 42f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-ko-0.22/resolve/main/vosk-model-small-ko-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-ko-0.22/resolve/main/vosk-model-small-ko-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-ko-0.22.zip"
                 )
             ),
@@ -109,8 +101,6 @@ class OfflineSpeechRecognizer(
                 "Français",
                 41f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-fr-0.22/resolve/main/vosk-model-small-fr-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-fr-0.22/resolve/main/vosk-model-small-fr-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-fr-0.22.zip"
                 )
             ),
@@ -119,8 +109,6 @@ class OfflineSpeechRecognizer(
                 "Deutsch",
                 41f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-de-0.22/resolve/main/vosk-model-small-de-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-de-0.22/resolve/main/vosk-model-small-de-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-de-0.22.zip"
                 )
             ),
@@ -129,8 +117,6 @@ class OfflineSpeechRecognizer(
                 "Español",
                 41f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-es-0.22/resolve/main/vosk-model-small-es-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-es-0.22/resolve/main/vosk-model-small-es-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-es-0.22.zip"
                 )
             ),
@@ -139,8 +125,6 @@ class OfflineSpeechRecognizer(
                 "Русский",
                 42f,
                 listOf(
-                    "$HF_MIRROR/alphacephei/vosk-model-small-ru-0.22/resolve/main/vosk-model-small-ru-0.22.zip",
-                    "$HF_ORIGINAL/alphacephei/vosk-model-small-ru-0.22/resolve/main/vosk-model-small-ru-0.22.zip",
                     "$ALPHACEPHEI/vosk-model-small-ru-0.22.zip"
                 )
             )
@@ -272,7 +256,7 @@ class OfflineSpeechRecognizer(
 
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = 15000
-        connection.readTimeout = 30000
+        connection.readTimeout = 60000
 
         // 断点续传：设置 Range 头
         if (downloadedBytes > 0) {

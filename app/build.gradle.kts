@@ -64,7 +64,7 @@ dependencies {
     implementation("com.alphacephei:vosk-android:0.3.47")
 
     // ML Kit 离线翻译 (中英文)
-    implementation("com.google.mlkit:translation:17.0.3")
+    implementation("com.google.mlkit:translate:17.0.3")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

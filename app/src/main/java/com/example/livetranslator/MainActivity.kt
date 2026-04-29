@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.livetranslator.ui.theme.LiveTranslatorTheme
-import com.google.mlkit.common.model.TranslateRemoteModel
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
@@ -185,7 +184,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "translation_" + System.currentTimeMillis())
     }
 
-    private fun mapToMlKitLanguage(code: String): TranslateLanguage? {
+    private fun mapToMlKitLanguage(code: String): String? {
         return when (code) {
             "zh" -> TranslateLanguage.CHINESE
             "en" -> TranslateLanguage.ENGLISH
@@ -635,8 +634,9 @@ fun DownloadProgressBar(progress: OfflineSpeechRecognizer.DownloadProgress) {
             Text(stateText, fontSize = 14.sp)
             if (progress.state == OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING && progress.totalMB > 0) {
                 Spacer(modifier = Modifier.height(4.dp))
+                @Suppress("DEPRECATION")
                 LinearProgressIndicator(
-                    progress = { progress.progress / 100f },
+                    progress = progress.progress / 100f,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(

@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.livetranslator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = 7
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -59,16 +59,13 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    
+
     // Vosk 离线语音识别
     implementation("com.alphacephei:vosk-android:0.3.47")
-    
-    // OkHttp for API calls
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    
-    // JSON parsing
-    implementation("org.json:json:20231013")
-    
+
+    // ML Kit 离线翻译 (中英文)
+    implementation("com.google.mlkit:translation:17.0.3")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }

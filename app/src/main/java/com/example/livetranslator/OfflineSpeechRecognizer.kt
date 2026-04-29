@@ -77,6 +77,7 @@ class OfflineSpeechRecognizer(
                 "English",
                 40f,
                 listOf(
+                    "$GITHUB_RELEASE/vosk-model-small-en-us-0.15.zip",
                     "$ALPHACEPHEI/vosk-model-small-en-us-0.15.zip"
                 )
             ),

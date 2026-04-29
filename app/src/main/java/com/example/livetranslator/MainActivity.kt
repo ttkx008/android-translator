@@ -3,128 +3,99 @@ package com.example.livetranslator
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.SwapHoriz
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.livetranslator.ui.theme.LiveTranslatorTheme
+import com.google.mlkit.common.model.TranslateRemoteModel
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
+import java.util.Locale
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private val viewModel = TranslationViewModel()
     private var offlineRecognizer: OfflineSpeechRecognizer? = null
+    private var tts: TextToSpeech? = null
+    private var isTtsReady = false
 
     private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
-            viewModel.permissionGranted()
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
+        if (audioGranted) {
+            viewModel.onPermissionGranted()
         } else {
-            viewModel.permissionDenied()
+            viewModel.onError("🔒 需要麦克风权限才能使用语音输入\n\n请在设置中授予")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        tts = TextToSpeech(this, this)
         checkPermissions()
         initOfflineRecognizer()
 
         setContent {
             LiveTranslatorTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    TranslatorScreen(
-                        viewModel = viewModel,
-                        onStartListening = { speaker ->
-                            startListeningForSpeaker(speaker)
-                        },
-                        onSwapLanguages = {
-                            viewModel.swapLanguages()
-                        },
-                        onSpeakTranslation = { message ->
-                            // TTS 功能
-                        },
-                        onManageModels = {
-                            viewModel.showModelManager.value = true
-                        }
-                    )
-                }
+                TranslatorApp(
+                    viewModel = viewModel,
+                    onStartRecording = {
+                        val langCode = viewModel.sourceLanguage.value.code
+                        offlineRecognizer?.startListening(langCode)
+                    },
+                    onStopRecording = {
+                        offlineRecognizer?.stopListening()
+                    }
+                )
             }
         }
     }
 
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            val result = tts?.setLanguage(Locale.US)
+            isTtsReady = result != TextToSpeech.LANG_MISSING_DATA &&
+                         result != TextToSpeech.LANG_NOT_SUPPORTED
+        }
+    }
+
     private fun checkPermissions() {
-        when {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED -> {
-                viewModel.permissionGranted()
-            }
-            else -> {
-                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            }
+        val permissions = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (permissions.isNotEmpty()) {
+            requestPermissionLauncher.launch(permissions.toTypedArray())
+        } else {
+            viewModel.onPermissionGranted()
         }
     }
 
@@ -132,106 +103,176 @@ class MainActivity : ComponentActivity() {
         offlineRecognizer = OfflineSpeechRecognizer(
             context = this,
             onResult = { text, isFinal ->
-                Log.d(TAG, "Speech result: $text, isFinal: $isFinal")
                 if (isFinal) {
                     viewModel.onSpeechRecognized(text)
                     translateText(text)
                 }
             },
             onError = { error ->
-                Log.e(TAG, "Speech error: $error")
-                runOnUiThread {
-                    viewModel.onError(error)
-                }
+                runOnUiThread { viewModel.onError(error) }
             },
             onListeningStart = {
-                Log.d(TAG, "Listening started")
-                runOnUiThread {
-                    viewModel.listeningStarted()
-                }
+                runOnUiThread { viewModel.onListeningStarted() }
             },
             onProgress = { progress ->
-                runOnUiThread {
-                    viewModel.updateDownloadProgress(progress)
-                }
+                runOnUiThread { viewModel.updateDownloadProgress(progress) }
             }
         )
         offlineRecognizer?.initialize()
-        
-        // 设置下载模型的函数
+
         viewModel.setDownloadModelFunc { languageCode ->
             offlineRecognizer?.downloadModel(languageCode)
         }
-        
-        // 更新已下载的模型列表
+
         runOnUiThread {
             viewModel.updateDownloadedModels(offlineRecognizer?.getDownloadedModels() ?: emptyList())
         }
     }
 
-    private fun startListeningForSpeaker(speaker: Speaker) {
-        if (!viewModel.isPermissionGranted.value) {
-            checkPermissions()
+    private fun translateText(text: String) {
+        val sourceLang = viewModel.sourceLanguage.value
+        val targetLang = viewModel.targetLanguage.value
+
+        viewModel.onTranslating()
+
+        // 使用 ML Kit 离线翻译
+        val sourceCode = mapToMlKitLanguage(sourceLang.code)
+        val targetCode = mapToMlKitLanguage(targetLang.code)
+
+        if (sourceCode == null || targetCode == null) {
+            viewModel.onError("不支持的语言: ${sourceLang.name} → ${targetLang.name}")
             return
         }
 
-        val language = if (speaker == Speaker.A) viewModel.sourceLanguage.value else viewModel.targetLanguage.value
-        offlineRecognizer?.startListening(language.code)
-        viewModel.setCurrentListeningSpeaker(speaker)
+        val options = TranslatorOptions.Builder()
+            .setSourceLanguage(sourceCode)
+            .setTargetLanguage(targetCode)
+            .build()
+        val translator = Translation.getClient(options)
+
+        // 先下载模型（如果还没下载）
+        translator.downloadModelIfNeeded()
+            .addOnSuccessListener {
+                translator.translate(text)
+                    .addOnSuccessListener { translatedText ->
+                        viewModel.onTranslationComplete(translatedText)
+                        // TTS 朗读翻译结果
+                        speakOut(translatedText, targetLang.code)
+                    }
+                    .addOnFailureListener { e ->
+                        viewModel.onError("翻译失败: ${e.message}")
+                    }
+            }
+            .addOnFailureListener { e ->
+                viewModel.onError("翻译模型下载失败: ${e.message}\n\n请检查网络连接")
+            }
     }
 
-    private fun translateText(text: String) {
-        viewModel.currentListeningSpeaker.value?.let { speaker ->
-            val sourceLang = if (speaker == Speaker.A) viewModel.sourceLanguage.value else viewModel.targetLanguage.value
-            val targetLang = if (speaker == Speaker.A) viewModel.targetLanguage.value else viewModel.sourceLanguage.value
+    private fun speakOut(text: String, langCode: String) {
+        if (!isTtsReady) return
+        val locale = when (langCode) {
+            "zh" -> Locale.CHINESE
+            "en" -> Locale.US
+            "ja" -> Locale.JAPANESE
+            "ko" -> Locale.KOREAN
+            "fr" -> Locale.FRENCH
+            "de" -> Locale.GERMAN
+            "es" -> Locale("es")
+            "ru" -> Locale("ru")
+            else -> Locale.US
+        }
+        tts?.language = locale
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "translation_" + System.currentTimeMillis())
+    }
 
-            LibreTranslateApi(
-                onTranslationComplete = { translatedText ->
-                    runOnUiThread {
-                        viewModel.translateCurrentText(translatedText)
-                    }
-                },
-                onError = { error ->
-                    runOnUiThread {
-                        viewModel.onError("翻译失败: $error")
-                    }
-                }
-            ).translate(text, sourceLang.code, targetLang.code)
+    private fun mapToMlKitLanguage(code: String): TranslateLanguage? {
+        return when (code) {
+            "zh" -> TranslateLanguage.CHINESE
+            "en" -> TranslateLanguage.ENGLISH
+            "ja" -> TranslateLanguage.JAPANESE
+            "ko" -> TranslateLanguage.KOREAN
+            "fr" -> TranslateLanguage.FRENCH
+            "de" -> TranslateLanguage.GERMAN
+            "es" -> TranslateLanguage.SPANISH
+            "ru" -> TranslateLanguage.RUSSIAN
+            else -> null
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         offlineRecognizer?.shutdown()
-    }
-
-    companion object {
-        private const val TAG = "MainActivity"
+        tts?.stop()
+        tts?.shutdown()
     }
 }
+
+// ==================== ViewModel ====================
 
 class TranslationViewModel {
     val isPermissionGranted = MutableStateFlow(false)
     val sourceLanguage = MutableStateFlow(Languages.getByCode("zh"))
     val targetLanguage = MutableStateFlow(Languages.getByCode("en"))
-    val messages = MutableStateFlow<List<ConversationMessage>>(emptyList())
-    val isListening = MutableStateFlow(false)
-    val currentListeningSpeaker = MutableStateFlow<Speaker?>(null)
+    val isRecording = MutableStateFlow(false)
+    val isTranslating = MutableStateFlow(false)
+    val sourceText = MutableStateFlow("")
+    val translatedText = MutableStateFlow("")
     val errorMessage = MutableStateFlow<String?>(null)
     val downloadProgress = MutableStateFlow<OfflineSpeechRecognizer.DownloadProgress?>(null)
     val downloadedModels = MutableStateFlow<List<String>>(emptyList())
-    val showModelManager = MutableStateFlow(false)
+    val showLanguagePicker = MutableStateFlow(false)
+    val pickingFor = MutableStateFlow("source") // "source" or "target"
 
-    private var nextId = 0L
+    private var downloadModelFunc: ((String) -> Unit)? = null
 
-    fun permissionGranted() {
+    fun onPermissionGranted() {
         isPermissionGranted.value = true
         errorMessage.value = null
     }
 
-    fun permissionDenied() {
-        isPermissionGranted.value = false
-        errorMessage.value = "🔒 麦克风权限被拒绝\n\n请在设置中授予麦克风权限才能使用语音输入"
+    fun startRecording() {
+        if (!isPermissionGranted.value) {
+            onError("请先授予麦克风权限")
+            return
+        }
+        isRecording.value = true
+        sourceText.value = ""
+        translatedText.value = ""
+        errorMessage.value = null
+    }
+
+    fun stopRecording(model: OfflineSpeechRecognizer?) {
+        isRecording.value = false
+        model?.stopListening()
+    }
+
+    fun onStopRecording() {
+        isRecording.value = false
+    }
+
+    fun onListeningStarted() {
+        isRecording.value = true
+    }
+
+    fun onSpeechRecognized(text: String) {
+        sourceText.value = text
+        isRecording.value = false
+    }
+
+    fun onTranslating() {
+        isTranslating.value = true
+        errorMessage.value = null
+    }
+
+    fun onTranslationComplete(translated: String) {
+        translatedText.value = translated
+        isTranslating.value = false
+    }
+
+    fun onError(error: String) {
+        isRecording.value = false
+        isTranslating.value = false
+        errorMessage.value = error
     }
 
     fun swapLanguages() {
@@ -239,130 +280,74 @@ class TranslationViewModel {
         val oldTarget = targetLanguage.value
         sourceLanguage.value = oldTarget
         targetLanguage.value = oldSource
+        // 交换文本
+        val oldSrcText = sourceText.value
+        val oldTransText = translatedText.value
+        sourceText.value = oldTransText
+        translatedText.value = oldSrcText
     }
 
-    fun setSourceLanguage(language: Language) {
-        sourceLanguage.value = language
+    fun openLanguagePicker(forWhich: String) {
+        pickingFor.value = forWhich
+        showLanguagePicker.value = true
     }
 
-    fun setTargetLanguage(language: Language) {
-        targetLanguage.value = language
-    }
-
-    fun setCurrentListeningSpeaker(speaker: Speaker) {
-        currentListeningSpeaker.value = speaker
-        isListening.value = true
-        errorMessage.value = null
-    }
-
-    fun listeningStarted() {
-        isListening.value = true
-        errorMessage.value = null
-        downloadProgress.value = null
-    }
-
-    fun onSpeechRecognized(text: String) {
-        isListening.value = false
-        currentListeningSpeaker.value?.let { speaker ->
-            val message = ConversationMessage(
-                id = nextId++,
-                speaker = speaker,
-                originalText = text,
-                translatedText = "翻译中..."
-            )
-            messages.update { it + message }
+    fun selectLanguage(language: Language) {
+        if (pickingFor.value == "source") {
+            sourceLanguage.value = language
+        } else {
+            targetLanguage.value = language
         }
-        errorMessage.value = null
+        showLanguagePicker.value = false
     }
 
-    fun translateCurrentText(translatedText: String) {
-        currentListeningSpeaker.value?.let { speaker ->
-            messages.update { currentMessages ->
-                currentMessages.map { msg ->
-                    if (msg.id == currentMessages.lastOrNull()?.id) {
-                        msg.copy(translatedText = translatedText)
-                    } else {
-                        msg
-                    }
-                }
-            }
-            errorMessage.value = null
-        }
+    fun setDownloadModelFunc(func: (String) -> Unit) {
+        downloadModelFunc = func
     }
 
-    fun onError(error: String) {
-        isListening.value = false
-        errorMessage.value = error
-        downloadProgress.value = null
+    fun downloadModel(languageCode: String) {
+        downloadModelFunc?.invoke(languageCode)
     }
 
     fun updateDownloadProgress(progress: OfflineSpeechRecognizer.DownloadProgress) {
         downloadProgress.value = progress
-    }
-    
-    private var downloadModelFunc: ((String) -> Unit)? = null
-    
-    fun setDownloadModelFunc(func: (String) -> Unit) {
-        downloadModelFunc = func
-    }
-    
-    fun onDownloadModel(languageCode: String) {
-        downloadModelFunc?.invoke(languageCode)
     }
 
     fun updateDownloadedModels(models: List<String>) {
         downloadedModels.value = models
     }
 
-    fun clearConversation() {
-        messages.value = emptyList()
-        nextId = 0
+    fun dismissError() {
         errorMessage.value = null
     }
 }
 
+// ==================== UI ====================
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TranslatorScreen(
+fun TranslatorApp(
     viewModel: TranslationViewModel,
-    onStartListening: (Speaker) -> Unit,
-    onSwapLanguages: () -> Unit,
-    onSpeakTranslation: (ConversationMessage) -> Unit,
-    onManageModels: () -> Unit
+    onStartRecording: () -> Unit = {},
+    onStopRecording: () -> Unit = {}
 ) {
-    val messages by viewModel.messages.collectAsState()
+    val isRecording by viewModel.isRecording.collectAsState()
+    val isTranslating by viewModel.isTranslating.collectAsState()
     val sourceLanguage by viewModel.sourceLanguage.collectAsState()
     val targetLanguage by viewModel.targetLanguage.collectAsState()
-    val isListening by viewModel.isListening.collectAsState()
-    val currentListeningSpeaker by viewModel.currentListeningSpeaker.collectAsState()
+    val sourceText by viewModel.sourceText.collectAsState()
+    val translatedText by viewModel.translatedText.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val showLanguagePicker by viewModel.showLanguagePicker.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
-    val isPermissionGranted by viewModel.isPermissionGranted.collectAsState()
-    val showModelManager by viewModel.showModelManager.collectAsState()
-    val downloadedModels by viewModel.downloadedModels.collectAsState()
-
-    if (showModelManager) {
-        ModelManagerDialog(
-            downloadedModels = downloadedModels,
-            onDismiss = { viewModel.showModelManager.value = false },
-            onDownload = { languageCode ->
-                viewModel.onDownloadModel(languageCode)
-            }
-        )
-    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("🗣️ 实时对话翻译 (离线版)") },
-                actions = {
-                    IconButton(onClick = onManageModels) {
-                        Icon(
-                            Icons.Outlined.Download,
-                            contentDescription = "管理模型"
-                        )
-                    }
-                }
+                title = { Text("💬 离线翻译", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
             )
         }
     ) { padding ->
@@ -371,623 +356,327 @@ fun TranslatorScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Language Selection Bar
-            LanguageSelector(
+            // 语言选择栏
+            LanguageBar(
                 sourceLanguage = sourceLanguage,
                 targetLanguage = targetLanguage,
-                onSourceChange = { viewModel.setSourceLanguage(it) },
-                onTargetChange = { viewModel.setTargetLanguage(it) },
-                onSwap = onSwapLanguages
+                onSwap = { viewModel.swapLanguages() },
+                onSourceClick = { viewModel.openLanguagePicker("source") },
+                onTargetClick = { viewModel.openLanguagePicker("target") }
             )
 
-            // Download Progress
-            downloadProgress?.let { progress ->
-                DownloadProgressCard(progress)
-            }
+            // 翻译内容区
+            TranslationContent(
+                sourceText = sourceText,
+                translatedText = translatedText,
+                isTranslating = isTranslating,
+                sourceLang = sourceLanguage,
+                targetLang = targetLanguage
+            )
 
-            // Conversation History
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(
-                        MaterialTheme.colorScheme.surfaceVariant,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                reverseLayout = false
-            ) {
-                if (messages.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text("🎤", fontSize = 48.sp)
-                                Text(
-                                    "点击下方按钮开始对话",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center
-                                )
-                                Text(
-                                    "说话人 A: ${sourceLanguage.name}\n说话人 B: ${targetLanguage.name}",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    fontSize = 12.sp
-                                )
-                                if (downloadedModels.isEmpty()) {
-                                    Text(
-                                        "💡 首次使用需要下载语音模型",
-                                        color = MaterialTheme.colorScheme.primary,
-                                        textAlign = TextAlign.Center,
-                                        fontSize = 11.sp
-                                    )
-                                    Text(
-                                        "点击右上角 ⬇️ 管理模型",
-                                        color = MaterialTheme.colorScheme.primary,
-                                        textAlign = TextAlign.Center,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    items(messages) { message ->
-                        MessageBubble(
-                            message = message,
-                            sourceLang = if (message.speaker == Speaker.A) sourceLanguage else targetLanguage,
-                            targetLang = if (message.speaker == Speaker.A) targetLanguage else sourceLanguage,
-                            onSpeak = onSpeakTranslation
-                        )
-                    }
-                }
-            }
-
-            // Status
-            if (isListening) {
-                Row(
-                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        "🔴 正在听 ${currentListeningSpeaker?.name ?: ""} 说话...",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // Error message
+            // 错误提示
             errorMessage?.let { error ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
-                    shape = RoundedCornerShape(8.dp)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text(
-                        text = error,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    Row(
                         modifier = Modifier.padding(12.dp),
-                        fontSize = 14.sp
-                    )
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(error, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer)
+                        IconButton(onClick = { viewModel.dismissError() }) {
+                            Icon(Icons.Default.Close, "关闭")
+                        }
+                    }
                 }
             }
 
-            // Microphone Buttons
+            // 下载进度
+            downloadProgress?.let { progress ->
+                DownloadProgressBar(progress)
+            }
+
+                    // 录音按钮
+            RecordButton(
+                isRecording = isRecording,
+                onClick = {
+                    if (isRecording) {
+                        onStopRecording()
+                        viewModel.onStopRecording()
+                    } else {
+                        viewModel.startRecording()
+                        onStartRecording()
+                    }
+                }
+            )
+        }
+    }
+
+    // 语言选择弹窗
+    if (showLanguagePicker) {
+        LanguagePickerDialog(
+            languages = Languages.languages,
+            onSelect = { viewModel.selectLanguage(it) },
+            onDismiss = { viewModel.showLanguagePicker.value = false }
+        )
+    }
+}
+
+@Composable
+fun LanguageBar(
+    sourceLanguage: Language,
+    targetLanguage: Language,
+    onSwap: () -> Unit,
+    onSourceClick: () -> Unit,
+    onTargetClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        // 源语言
+        LanguageChip(
+            language = sourceLanguage,
+            onClick = onSourceClick,
+            modifier = Modifier.weight(1f)
+        )
+
+        // 交换按钮
+        IconButton(
+            onClick = onSwap,
+            modifier = Modifier
+                .padding(horizontal = 8.dp)
+                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+        ) {
+            Icon(Icons.Default.SwapHoriz, "交换语言")
+        }
+
+        // 目标语言
+        LanguageChip(
+            language = targetLanguage,
+            onClick = onTargetClick,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+fun LanguageChip(language: Language, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+        Text(
+            language.name,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            fontWeight = FontWeight.Medium,
+            fontSize = 16.sp
+        )
+    }
+}
+
+@Composable
+fun TranslationContent(
+    sourceText: String,
+    translatedText: String,
+    isTranslating: Boolean,
+    sourceLang: Language,
+    targetLang: Language
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+            .padding(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 源文本
+        TextCard(
+            label = "🎤 ${sourceLang.name}",
+            text = sourceText.ifEmpty { "点击下方按钮开始说话..." },
+            isPlaceholder = sourceText.isEmpty(),
+            containerColor = Color(0xFFE3F2FD)
+        )
+
+        // 分隔线
+        if (isTranslating) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(
-                    onClick = { onStartListening(Speaker.A) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isListening && currentListeningSpeaker == Speaker.A) 
-                            Color(0xFF1565C0) else Color(0xFFE3F2FD)
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    enabled = !isListening && downloadProgress?.state != OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text("🎤", fontSize = 24.sp)
-                        Text(
-                            "A (${sourceLanguage.code})",
-                            color = if (isListening && currentListeningSpeaker == Speaker.A) 
-                                Color.White else Color.Black,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = { onStartListening(Speaker.B) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(72.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isListening && currentListeningSpeaker == Speaker.B) 
-                            Color(0xFF7B1FA2) else Color(0xFFF3E5F5)
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    enabled = !isListening && downloadProgress?.state != OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text("🎤", fontSize = 24.sp)
-                        Text(
-                            "B (${targetLanguage.code})",
-                            color = if (isListening && currentListeningSpeaker == Speaker.B) 
-                                Color.White else Color.Black,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("翻译中...", color = Color.Gray)
             }
-
-            // Clear Button
-            OutlinedButton(
-                onClick = { viewModel.clearConversation() },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isListening
-            ) {
-                Text("🗑️ 清空对话")
-            }
-
-            // Permission hint
-            if (!isPermissionGranted) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        "⚠️ 需要麦克风权限才能使用语音输入\n请点击上方按钮授予权限",
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(12.dp),
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
+        } else if (translatedText.isNotEmpty()) {
+            Icon(
+                Icons.Default.ArrowDownward,
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                tint = Color.Gray
+            )
         }
+
+        // 翻译文本
+        TextCard(
+            label = "📖 ${targetLang.name}",
+            text = translatedText.ifEmpty { "翻译结果将显示在这里..." },
+            isPlaceholder = translatedText.isEmpty(),
+            containerColor = Color(0xFFF3E5F5)
+        )
     }
 }
 
 @Composable
-fun DownloadProgressCard(progress: OfflineSpeechRecognizer.DownloadProgress) {
-    val progressFloat = progress.progress / 100f
-    
+fun TextCard(label: String, text: String, isPlaceholder: Boolean, containerColor: Color) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = when (progress.state) {
-                OfflineSpeechRecognizer.DownloadProgress.State.ERROR -> 
-                    MaterialTheme.colorScheme.errorContainer
-                OfflineSpeechRecognizer.DownloadProgress.State.READY -> 
-                    Color(0xFFE8F5E9)
-                else -> 
-                    MaterialTheme.colorScheme.secondaryContainer
-            }
-        ),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            when (progress.state) {
-                OfflineSpeechRecognizer.DownloadProgress.State.CHECKING -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text("🔍 检查网络连接...")
-                    }
-                }
-                
-                OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING -> {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            "📥 下载语音模型",
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            "${progress.progress}%",
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    
-                    LinearProgressIndicator(
-                        progress = { progressFloat },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                    )
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            "${progress.downloadedMB.toFixed(1)} / ${progress.totalMB.toFixed(1)} MB",
-                            fontSize = 12.sp,
-                            color = Color.Gray
-                        )
-                        if (progress.speedKBps > 0) {
-                            Text(
-                                "${progress.speedKBps.toFixed(0)} KB/s",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        if (progress.etaSeconds > 0) {
-                            Text(
-                                "剩余 ${formatTime(progress.etaSeconds)}",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                    }
-                }
-                
-                OfflineSpeechRecognizer.DownloadProgress.State.EXTRACTING -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text("📦 解压模型文件...")
-                    }
-                }
-                
-                OfflineSpeechRecognizer.DownloadProgress.State.LOADING -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text("🔄 加载语音模型...")
-                    }
-                }
-                
-                OfflineSpeechRecognizer.DownloadProgress.State.READY -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Outlined.Check,
-                            contentDescription = null,
-                            tint = Color(0xFF4CAF50),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            "✅ 模型就绪！可以开始使用",
-                            color = Color(0xFF4CAF50),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-                
-                OfflineSpeechRecognizer.DownloadProgress.State.ERROR -> {
-                    Text(
-                        text = progress.error,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-                
-                else -> {}
-            }
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                label,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text,
+                fontSize = 18.sp,
+                color = if (isPlaceholder) Color.Gray else Color.Black,
+                lineHeight = 26.sp
+            )
         }
     }
 }
 
 @Composable
-fun ModelManagerDialog(
-    downloadedModels: List<String>,
-    onDismiss: () -> Unit,
-    onDownload: (String) -> Unit
-) {
-    val selectedModels = remember { mutableStateListOf<String>() }
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("📥 管理语音模型") },
-        text = {
-            Column {
-                Text(
-                    "选择需要下载的语言模型",
-                    fontSize = 14.sp,
-                    color = Color.Gray
+fun RecordButton(isRecording: Boolean, onClick: () -> Unit) {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isRecording) 1.2f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+
+    val buttonColor by animateColorAsState(
+        targetValue = if (isRecording) Color(0xFFFF5252) else MaterialTheme.colorScheme.primary,
+        label = "color"
+    )
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(bottom = 24.dp)
+    ) {
+        FloatingActionButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(80.dp)
+                .scale(scale),
+            containerColor = buttonColor,
+            shape = CircleShape
+        ) {
+            Icon(
+                if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                contentDescription = if (isRecording) "停止" else "开始说话",
+                modifier = Modifier.size(36.dp),
+                tint = Color.White
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            if (isRecording) "🔴 点击停止并翻译" else "🎤 点击开始说话",
+            fontSize = 14.sp,
+            color = if (isRecording) Color.Red else Color.Gray,
+            fontWeight = if (isRecording) FontWeight.Bold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+fun DownloadProgressBar(progress: OfflineSpeechRecognizer.DownloadProgress) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            val stateText = when (progress.state) {
+                OfflineSpeechRecognizer.DownloadProgress.State.CHECKING -> "🔍 检查模型..."
+                OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING -> {
+                    if (progress.speedKBps > 0) {
+                        "⬇️ 下载中 ${progress.progress}% (${String.format("%.1f", progress.speedKBps)}KB/s)"
+                    } else {
+                        "⬇️ 下载中 ${progress.progress}%"
+                    }
+                }
+                OfflineSpeechRecognizer.DownloadProgress.State.EXTRACTING -> "📦 解压模型..."
+                OfflineSpeechRecognizer.DownloadProgress.State.LOADING -> "⏳ 加载模型..."
+                OfflineSpeechRecognizer.DownloadProgress.State.READY -> "✅ 模型就绪"
+                OfflineSpeechRecognizer.DownloadProgress.State.ERROR -> "❌ ${progress.error}"
+                else -> "准备中..."
+            }
+            Text(stateText, fontSize = 14.sp)
+            if (progress.state == OfflineSpeechRecognizer.DownloadProgress.State.DOWNLOADING && progress.totalMB > 0) {
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { progress.progress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "💡 每个模型约 40-50MB，建议只下载需要的语言",
+                    "${String.format("%.1f", progress.downloadedMB)}MB / ${String.format("%.0f", progress.totalMB)}MB",
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                OfflineSpeechRecognizer.MODELS.forEach { (code, info) ->
-                    val isDownloaded = downloadedModels.contains(code)
+            }
+        }
+    }
+}
+
+@Composable
+fun LanguagePickerDialog(
+    languages: List<Language>,
+    onSelect: (Language) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择语言") },
+        text = {
+            Column {
+                languages.forEach { language ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .clickable { onSelect(language) }
+                            .padding(vertical = 12.dp, horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = selectedModels.contains(code) || isDownloaded,
-                            onCheckedChange = { checked ->
-                                if (!isDownloaded) {
-                                    if (checked) {
-                                        selectedModels.add(code)
-                                    } else {
-                                        selectedModels.remove(code)
-                                    }
-                                }
-                            },
-                            enabled = !isDownloaded
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "${info.displayName} (${code})",
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                "约 ${info.sizeMB.toInt()} MB",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        if (isDownloaded) {
-                            Icon(
-                                Icons.Outlined.Check,
-                                contentDescription = "已下载",
-                                tint = Color(0xFF4CAF50)
-                            )
-                        }
+                        Text(language.name, fontSize = 18.sp)
                     }
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    selectedModels.forEach { code ->
-                        onDownload(code)
-                    }
-                    selectedModels.clear()
-                    onDismiss()
-                },
-                enabled = selectedModels.isNotEmpty()
-            ) {
-                Text("下载选中 (${selectedModels.size})")
-            }
-        },
-        dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("关闭")
+                Text("取消")
             }
         }
     )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LanguageSelector(
-    sourceLanguage: Language,
-    targetLanguage: Language,
-    onSourceChange: (Language) -> Unit,
-    onTargetChange: (Language) -> Unit,
-    onSwap: () -> Unit
-) {
-    var sourceExpanded by remember { mutableStateOf(false) }
-    var targetExpanded by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                MaterialTheme.colorScheme.surface,
-                RoundedCornerShape(12.dp)
-            )
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        ExposedDropdownMenuBox(
-            expanded = sourceExpanded,
-            onExpandedChange = { sourceExpanded = it },
-            modifier = Modifier.weight(1f)
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(
-                    "源: ${sourceLanguage.name}",
-                    modifier = Modifier.padding(12.dp),
-                    fontSize = 14.sp
-                )
-            }
-            ExposedDropdownMenu(
-                expanded = sourceExpanded,
-                onDismissRequest = { sourceExpanded = false }
-            ) {
-                Languages.languages.forEach { language ->
-                    DropdownMenuItem(
-                        text = { Text(language.name) },
-                        onClick = {
-                            onSourceChange(language)
-                            sourceExpanded = false
-                        }
-                    )
-                }
-            }
-        }
-
-        IconButton(
-            onClick = onSwap,
-            modifier = Modifier
-                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
-                .clip(CircleShape)
-        ) {
-            Icon(
-                Icons.Outlined.SwapHoriz,
-                contentDescription = "交换语言",
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-        }
-
-        ExposedDropdownMenuBox(
-            expanded = targetExpanded,
-            onExpandedChange = { targetExpanded = it },
-            modifier = Modifier.weight(1f)
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(
-                    "目标: ${targetLanguage.name}",
-                    modifier = Modifier.padding(12.dp),
-                    fontSize = 14.sp
-                )
-            }
-            ExposedDropdownMenu(
-                expanded = targetExpanded,
-                onDismissRequest = { targetExpanded = false }
-            ) {
-                Languages.languages.forEach { language ->
-                    DropdownMenuItem(
-                        text = { Text(language.name) },
-                        onClick = {
-                            onTargetChange(language)
-                            targetExpanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MessageBubble(
-    message: ConversationMessage,
-    sourceLang: Language,
-    targetLang: Language,
-    onSpeak: (ConversationMessage) -> Unit
-) {
-    val backgroundColor = if (message.speaker == Speaker.A) {
-        Color(0xFFE3F2FD)
-    } else {
-        Color(0xFFF3E5F5)
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = backgroundColor)
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "说话人 ${message.speaker.name} (${sourceLang.name})",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = Color.Gray
-                )
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
-            ) {
-                Text(
-                    text = message.originalText,
-                    modifier = Modifier.padding(8.dp),
-                    fontSize = 16.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                "↓ ${targetLang.name}",
-                fontSize = 12.sp,
-                color = Color.Gray,
-                fontWeight = FontWeight.Bold
-            )
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA))
-            ) {
-                Text(
-                    text = message.translatedText,
-                    modifier = Modifier.padding(8.dp),
-                    fontSize = 16.sp,
-                    color = Color.Black
-                )
-            }
-        }
-    }
-}
-
-// 辅助函数
-fun Float.toFixed(decimals: Int): String {
-    return String.format("%.${decimals}f", this)
-}
-
-fun formatTime(seconds: Int): String {
-    val mins = seconds / 60
-    val secs = seconds % 60
-    return if (mins > 0) "${mins}分${secs}秒" else "${secs}秒"
 }

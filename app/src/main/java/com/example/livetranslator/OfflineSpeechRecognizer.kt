@@ -370,14 +370,55 @@ class OfflineSpeechRecognizer(
         targetDir.mkdirs()
         val zipInputStream = ZipInputStream(tempFile.inputStream())
         var entry = zipInputStream.nextEntry
+
+        // 检测 ZIP 是否有单一根目录（如 vosk-model-small-cn-0.22/）
+        // 如果有，需要把内容直接解压到 targetDir，跳过根目录层
+        var rootDirName = ""
+        val tempEntries = mutableListOf<Pair<String, Long>>()
+        val tempZip = ZipInputStream(tempFile.inputStream())
+        var tempEntry = tempZip.nextEntry
+        while (tempEntry != null) {
+            if (rootDirName.isEmpty() && tempEntry.name.contains("/")) {
+                rootDirName = tempEntry.name.substringBefore("/")
+            }
+            tempEntries.add(Pair(tempEntry.name, tempEntry.size))
+            tempEntry = tempZip.nextEntry
+        }
+        tempZip.close()
+
+        // 检查是否所有条目都在同一个根目录下
+        val hasRootDir = rootDirName.isNotEmpty() &&
+            tempEntries.all { it.first.startsWith("$rootDirName/") }
+
+        if (hasRootDir) {
+            Log.d(TAG, "ZIP has root dir: $rootDirName, extracting without it")
+        }
+
+        entry = zipInputStream.nextEntry
         while (entry != null) {
-            val filePath = File(targetDir, entry.name)
-            if (entry.isDirectory) {
-                filePath.mkdirs()
+            // 跳过根目录条目本身
+            if (hasRootDir && entry.name == "$rootDirName/") {
+                zipInputStream.closeEntry()
+                entry = zipInputStream.nextEntry
+                continue
+            }
+
+            // 如果有根目录，去掉前缀
+            val entryName = if (hasRootDir) {
+                entry.name.removePrefix("$rootDirName/")
             } else {
-                filePath.parentFile?.mkdirs()
-                FileOutputStream(filePath).use { output ->
-                    zipInputStream.copyTo(output)
+                entry.name
+            }
+
+            if (entryName.isNotEmpty()) {
+                val filePath = File(targetDir, entryName)
+                if (entry.isDirectory) {
+                    filePath.mkdirs()
+                } else {
+                    filePath.parentFile?.mkdirs()
+                    FileOutputStream(filePath).use { output ->
+                        zipInputStream.copyTo(output)
+                    }
                 }
             }
             zipInputStream.closeEntry()

@@ -492,7 +492,6 @@ fun TranslationContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .weight(1f)
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
